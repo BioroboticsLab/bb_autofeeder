@@ -1,6 +1,9 @@
 #include <Arduino.h>
 #include <Preferences.h>
 Preferences prefs;
+#include "EEPROM.h"
+const char* ns = "prefs"; // namespace
+const char* key = "capValue"; // key for the value
 
 const int pumpPin = 23;  // GPIO-Pin, der mit dem MOSFET-Gate verbunden ist
 #define TOUCH_PIN T0
@@ -37,18 +40,19 @@ void setup() {
   digitalWrite(BUTTON_HIGH, HIGH);
   digitalWrite(BUTTON_IN, LOW); // PULL DOWN
 
-  prefs.begin("config", false); // false = read+write
+  // Open NVS (non-volatile storage)
+  prefs.begin(ns, false); // false = read+write
   delay(1000);
 
   // Check if calibration has done.
-  int prefCalibrationValue = prefs.getInt("fullCapacitiveValue", 0);
+  int prefCalibrationValue = prefs.getInt(key, 0);
   if (prefCalibrationValue == 0) {
     Serial.println("No custom capacitive value set, set default.");
-    prefs.putInt("fullCapacitiveValue", fullCapacitiveValue);
+    prefs.putInt(key, fullCapacitiveValue);
     prefs.end();  // Force flush
     prefs.begin("config", true); // Reopen in read-only
     Serial.print("Stored default Value: ");
-    Serial.println(prefs.getInt("fullCapacitiveValue", 0));
+    Serial.println(prefs.getInt(key, 0));
   } else {
     fullCapacitiveValue = prefCalibrationValue;
     Serial.print("Loaded calibrated capacitive value: ");
@@ -91,7 +95,7 @@ void setup() {
     Serial.print(" to ");
     Serial.println(fullCapacitiveValue);
     // Save value
-    prefs.putInt("fullCapacitiveValue", fullCapacitiveValue);
+    prefs.putInt(key, fullCapacitiveValue);
   }
   for (int i = 0; i < 5; i++) {
     digitalWrite(LED_BUILTIN, HIGH);
