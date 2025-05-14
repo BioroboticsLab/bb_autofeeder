@@ -108,10 +108,12 @@ void setup() {
   
   // Load total pumps since calibration
   totalPumpsSinceCalibration = prefs.getUInt(pumpKey, 0);
+  prefs.end();
   Serial.print("Total pumps since last calibration: ");
   Serial.println(totalPumpsSinceCalibration);
   
   // Check if calibration has been done
+  prefs.begin(ns, false); // false = read+write
   int prefCalibrationValue = prefs.getInt(capKey, 0);
   if (prefCalibrationValue == 0) {
     Serial.println("No custom capacitive value set, setting default.");
@@ -123,6 +125,7 @@ void setup() {
     Serial.print("Loaded calibrated capacitive value: ");
     Serial.println(fullCapacitiveValue);
   }
+  prefs.end();
   
   // Wait and check if button is pressed for calibration
   delay(5000);
@@ -151,14 +154,15 @@ void setup() {
     Serial.print(prefCalibrationValue);
     Serial.print(" to ");
     Serial.println(fullCapacitiveValue);
-    
+
+    prefs.begin(ns, false); // false = read+write
     // Save calibrated value
     prefs.putInt(capKey, fullCapacitiveValue);
     
     // Reset pump counter since we're calibrating
     totalPumpsSinceCalibration = 0;
     prefs.putUInt(pumpKey, totalPumpsSinceCalibration);
-    
+    prefs.end();
     Serial.println("Pump counter reset to 0");
   }
   
