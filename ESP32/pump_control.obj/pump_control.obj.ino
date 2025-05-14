@@ -5,7 +5,8 @@
 // Constants for Preferences
 Preferences prefs;
 const char* ns = "prefs";       // namespace
-const char* key = "capValue";   // key for the value
+const char* capKey = "capValue"; // key for the capacitive value
+const char* pumpKey = "totalPump"; // key for total pump count
 
 // Pin Definitions
 const int pumpPin = 23;         // GPIO-Pin connected to MOSFET gate
@@ -18,21 +19,23 @@ const int pumpPin = 23;         // GPIO-Pin connected to MOSFET gate
 // PWM Settings
 const int freq = 50;            // PWM frequency in Hz
 const int resolution = 8;
-const int dutyCycle = 125;      // ~67% of 255 for approx. 6V
+const int dutyCycle = 125;      // ~67% of 255 for approx. 6V -> Edit if using different voltage for power supply
 
 // Sensor Settings
 int overflow_protect = 0;
 uint16_t emptyCapacitiveValue = 0;
 uint16_t fullCapacitiveValue = 45;
+uint32_t totalPumpsSincePowerUp = 0;
+uint32_t totalPumpsSinceCalibration = 0;
 
 /**
- * Smooths touch readings by averaging multiple samples
- * 
- * @param touchPin Pin to read from
- * @param samples Number of samples to take
- * @param delayMicros Delay between samples in microseconds
- * @return Averaged touch reading
- */
+* Smooths touch readings by averaging multiple samples
+*
+* @param touchPin Pin to read from
+* @param samples Number of samples to take
+* @param delayMicros Delay between samples in microseconds
+* @return Averaged touch reading
+*/
 uint16_t getSmoothedTouch(uint8_t touchPin, uint16_t samples = 64, uint16_t delayMicros = 50) {
   uint32_t sum = 0;
   for (uint16_t i = 0; i < samples; i++) {
@@ -41,7 +44,6 @@ uint16_t getSmoothedTouch(uint8_t touchPin, uint16_t samples = 64, uint16_t dela
   }
   return sum / samples;
 }
-
 
 void blinkLED(int times, int onTime = 200, int offTime = 200) {
   for (int i = 0; i < times; i++) {
@@ -52,13 +54,30 @@ void blinkLED(int times, int onTime = 200, int offTime = 200) {
   }
 }
 
-/* Turn the pump on for a specified duration */
+/* 
+ * Turn the pump on for a specified duration 
+ * Updates pump counters and saves to persistent storage
+ */
 void runPump(int durationMs = 1000) {
+  // Open preferences for writing
+  prefs.begin(ns, false);
+  
+  // Run the pump
   ledcWrite(pumpPin, dutyCycle);
   Serial.println("Pump on");
   delay(durationMs);
   ledcWrite(pumpPin, 0);
   Serial.println("Pump off");
+  
+  // Update counters
+  totalPumpsSincePowerUp++;
+  totalPumpsSinceCalibration++;
+  
+  // Save to persistent storage
+  prefs.putUInt(pumpKey, totalPumpsSinceCalibration);
+  
+  // Close preferences
+  prefs.end();
 }
 
 void setup() {
@@ -87,13 +106,18 @@ void setup() {
   prefs.begin(ns, false); // false = read+write
   delay(1000);
   
+  // Load total pumps since calibration
+  totalPumpsSinceCalibration = prefs.getUInt(pumpKey, 0);
+  Serial.print("Total pumps since last calibration: ");
+  Serial.println(totalPumpsSinceCalibration);
+  
   // Check if calibration has been done
-  int prefCalibrationValue = prefs.getInt(key, 0);
+  int prefCalibrationValue = prefs.getInt(capKey, 0);
   if (prefCalibrationValue == 0) {
     Serial.println("No custom capacitive value set, setting default.");
-    prefs.putInt(key, fullCapacitiveValue);
+    prefs.putInt(capKey, fullCapacitiveValue);
     Serial.print("Stored default value: ");
-    Serial.println(prefs.getInt(key, 0));
+    Serial.println(prefs.getInt(capKey, 0));
   } else {
     fullCapacitiveValue = prefCalibrationValue;
     Serial.print("Loaded calibrated capacitive value: ");
@@ -129,7 +153,13 @@ void setup() {
     Serial.println(fullCapacitiveValue);
     
     // Save calibrated value
-    prefs.putInt(key, fullCapacitiveValue);
+    prefs.putInt(capKey, fullCapacitiveValue);
+    
+    // Reset pump counter since we're calibrating
+    totalPumpsSinceCalibration = 0;
+    prefs.putUInt(pumpKey, totalPumpsSinceCalibration);
+    
+    Serial.println("Pump counter reset to 0");
   }
   
   // Indicate setup completion
@@ -142,10 +172,15 @@ void loop() {
   int capacitiveValue = getSmoothedTouch(TOUCH_PIN);
   
   // Print capacitive values
+  Serial.println("\n========== STATS ==========");
   Serial.print("Measured Capacitive Value: ");
   Serial.println(capacitiveValue);
   Serial.print("Full Capacitive Value: ");
   Serial.println(fullCapacitiveValue);
+  Serial.print("Pumps since power up: ");
+  Serial.println(totalPumpsSincePowerUp);
+  Serial.print("Pumps since last calibration: ");
+  Serial.println(totalPumpsSinceCalibration);
   
   // Check if we need to run the pump
   if (capacitiveValue > fullCapacitiveValue) {
