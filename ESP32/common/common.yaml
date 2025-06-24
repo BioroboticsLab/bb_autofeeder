@@ -17,7 +17,7 @@ logger:
 
 # Enable Home Assistant API
 api:
-  password: "lpcDvPGYyTL2"
+  password: !secret api_password
   reboot_timeout: 12h
 
 ota:
