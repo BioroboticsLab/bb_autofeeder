@@ -1,0 +1,9 @@
+substitutions:
+  devicename: "beefeedera"
+  ntfy_topic: "fu_bee_feeder"
+  ntfy_topic_status: "fu_bee_feeder_status"
+  device_name: "ntfy-notifier-idf"
+  friendly_name: "ntfy Notifier (IDF)"
+
+<<: !include ../common/common.yaml
+<<: !include ../common/ntfy.yaml

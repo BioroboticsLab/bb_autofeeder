@@ -1,0 +1,42 @@
+# Gitignore settings for ESPHome
+# This is an example and may include too much for your use-case.
+# You can modify this file to suit your needs.
+/.esphome/
+/secrets.yaml
+
+# ESPHome build files
+*.pyc
+__pycache__/
+.build/
+.esphome/
+
+# Secrets and sensitive data
+secrets.yaml
+secrets/*.yaml
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# Python virtual environment
+.venv/
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# VS Code settings (if used)
+.vscode/
+
+# PlatformIO (if used)
+.pio/
+*.elf
+*.bin
+*.map
+*.d
+*.o
+
+# YAML linter cache
+.yamllint
+

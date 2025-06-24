@@ -1,0 +1,359 @@
+esphome:
+  name: ${devicename}
+  platformio_options:
+    board_build.flash_mode: dio
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+      type: esp-idf
+      sdkconfig_options:
+        CONFIG_BT_BLE_50_FEATURES_SUPPORTED: y
+        CONFIG_BT_BLE_42_FEATURES_SUPPORTED: y
+
+# Enable logging
+logger:
+  level: DEBUG
+
+# Enable Home Assistant API
+api:
+  password: "lpcDvPGYyTL2"
+  reboot_timeout: 12h
+
+ota:
+  - platform: esphome
+    password: ""
+
+
+wifi:
+  ssid: "cirrus"
+  password: !secret WIFI_PASSWD
+  power_save_mode: none
+  fast_connect: true
+  output_power: 8.5
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "beefeederatroof"
+    password: !secret ap_password
+  
+
+web_server:
+  port: 80
+  version: 3
+  local: true
+  sorting_groups:
+    - id: sorting_group_status
+      name: "Status"
+      sorting_weight: 9
+    - id: sorting_group_advanced_pump_settings
+      name: "Pump Settings"
+      sorting_weight: 10
+
+  #captive_portal:
+    
+# ————— Touch Pad Hub —————
+esp32_touch:
+  id: esp32_touch_1
+  measurement_duration: 0.25ms
+  debounce_count: 0
+  filter_mode: IIR_4
+  noise_threshold: 3
+  jitter_step: 0
+  smooth_mode: IIR_4
+  denoise_grade: BIT12
+  denoise_cap_level: L1
+
+# ————— User‐set Threshold —————
+number:
+  - platform: template
+    name: "Water Level Threshold"
+    id: touch_threshold
+    optimistic: true
+    restore_value: true
+    min_value: 0
+    max_value: 1200000
+    step: 100
+    initial_value: 0
+    web_server:
+      sorting_group_id: sorting_group_advanced_pump_settings
+  - platform: template
+    name: "Delay Between Pumps (s)"
+    id: pump_delay
+    optimistic: true
+    restore_value: true
+    min_value: 0
+    max_value: 20
+    step: 1
+    initial_value: 10
+    web_server:
+      sorting_group_id: sorting_group_advanced_pump_settings
+  - platform: template
+    name: "Pump On Duration (ms)"
+    id: pump_on_duration
+    optimistic: true
+    restore_value: true
+    min_value: 0
+    max_value: 3000
+    step: 1
+    initial_value: 1000
+    web_server:
+      sorting_group_id: sorting_group_advanced_pump_settings
+
+# ————— Counters & Outputs —————
+globals:
+  - id: total_pumps
+    type: int
+    restore_value: true
+    initial_value: '0'
+  - id: total_pumps_since_boot
+    type: int
+    restore_value: false
+    initial_value: '0'
+  - id: pumps_in_cycle
+    type: int
+    restore_value: false
+    initial_value: '0'
+  - id: stuck_value_center
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: stuck_reading_counter
+    type: int
+    restore_value: no
+    initial_value: '0'
+output:
+  - platform: ledc
+    id: pwm_output
+    pin: GPIO13
+    frequency: 50Hz
+
+# ————— Binary Sensors —————
+binary_sensor:
+  # 1) Raw-touch pad (always on, gives .get_value())
+  - platform: esp32_touch
+    id: esp32_touch_pad
+    pin: GPIO2
+    threshold: 0
+
+  # 2) Debounced “below threshold” trigger
+  - platform: template
+    id: touch_trigger
+    name: "Pump Trigger"
+    lambda: |-
+      // true when pad reading > user‐set threshold
+      return id(esp32_touch_pad).get_value()
+             < static_cast<int>(id(touch_threshold).state);
+    filters:
+      - delayed_on: 5s    # require 5s continuously above threshold
+      - delayed_off: 0s   # optional: require 5s below threshold to reset
+    on_press:
+      - script.execute: pump_until_full
+    web_server:
+      sorting_group_id: sorting_group_status
+      sorting_weight: 10
+
+# ————— Exposed Sensors —————
+sensor:
+  - platform: uptime
+    name: "Uptime"
+    id: uptime_sensor
+  - platform: template
+    id: raw_capacitive_value_sensor
+    name: "Raw Capacitive Value"
+    update_interval: 1s
+    lambda: |-
+      return id(esp32_touch_pad).get_value();
+    web_server:
+      sorting_group_id: sorting_group_status
+      sorting_weight: 12
+    
+    # =========================================
+    # ============ STUCK WATCHDOG  ============
+    # =========================================
+    on_value:
+      then:
+        # Check if the value is within the range.
+        - lambda: |-
+            const int tolerance = 1;
+            int current_value = static_cast<int>(x);
+
+            // If the counter is 0, it's the start of a new potential "stuck" sequence.
+            // We set the center and start the count at 1.
+            if (id(stuck_reading_counter) == 0) {
+              id(stuck_value_center) = current_value;
+              id(stuck_reading_counter) = 1;
+              return; // Exit the lambda early
+            }
+            
+            // Check if the current value is within the tolerance of the established center.
+            // abs(a - b) gives the distance between two numbers.
+            if (abs(current_value - id(stuck_value_center)) <= tolerance) {
+              // It's inside the range, so it's potentially stuck. Increment counter.
+              id(stuck_reading_counter)++;
+            } else {
+              // It's outside the range! This is healthy.
+              // Reset by setting a new center and restarting the count at 1.
+              id(stuck_value_center) = current_value;
+              id(stuck_reading_counter) = 1;
+            }
+
+        # Debug logging to see what's happening.
+        - logger.log:
+            format: "Stuck sensor check. Center: %d, Current: %.0f, Count: %d"
+            args: [ 'id(stuck_value_center)', 'x', 'id(stuck_reading_counter)' ]
+            level: DEBUG
+
+        # Reboot trigger
+        - if:
+            condition:
+              lambda: 'return id(stuck_reading_counter) >= 10;'
+            then:
+              - logger.log:
+                  level: ERROR
+                  format: "Sensor has been stuck near %d for 10 readings. Rebooting!"
+                  args: [ 'id(stuck_value_center)' ]
+              - delay: 1s
+              - switch.turn_on: reboot_switch
+  - platform: template
+    id: total_pumps_reboot_sensor
+    name: "Total Pumps Since Boot"
+    update_interval: never
+    lambda: |-
+      return id(total_pumps_since_boot);
+    web_server:
+      sorting_group_id: sorting_group_status
+      sorting_weight: 11
+  - platform: template
+    id: total_pumps_sensor
+    name: "Total Pumps"
+    update_interval: never
+    lambda: |-
+      return id(total_pumps);
+    web_server:
+      sorting_group_id: sorting_group_status
+      sorting_weight: 10
+
+# ————— Pump Script —————
+script:
+  - id: pump_until_full
+    mode: single   # ignore new calls while running
+    then:
+      - logger.log:
+          format: "pump: Water level below threshold, activating pump."
+          level: INFO
+      - lambda: |-
+          id(pumps_in_cycle) = 0; 
+      # Loop: pump on → wait → pump off → wait, until below threshold
+      - while:
+          condition:
+            lambda: |-
+              return id(esp32_touch_pad).get_value()
+                     < static_cast<int>(id(touch_threshold).state);
+          then:
+            - output.set_level:
+                id: pwm_output
+                level: 100%
+            - lambda: |-
+                id(pumps_in_cycle) += 1;
+                id(total_pumps) += 1;
+                id(total_pumps_since_boot) += 1;
+                id(total_pumps_sensor).publish_state(id(total_pumps));
+                id(total_pumps_reboot_sensor).publish_state(id(total_pumps_since_boot));
+            - logger.log: "pump: ON"
+            - delay: !lambda "return static_cast<int>(id(pump_on_duration).state);"
+            - output.set_level:
+                id: pwm_output
+                level: 0.0
+            - logger.log: "pump: OFF"
+            
+            # ====================================================
+            # ================ NOTIFICATION LOGIC ================
+            # ====================================================
+            - if:
+                condition:
+                  lambda: 'return id(pumps_in_cycle) == 10 || id(pumps_in_cycle)%10000 == 0;'
+                then:
+                  - logger.log: "pump: Pump cycle count > 10. Sending failure notification."
+                  - http_request.post:
+                      url: !lambda 'return "https://ntfy.sh/${ntfy_topic}";'
+                      body: !lambda |-
+                        return { "The pump has run " + std::to_string(id(pumps_in_cycle)) + " times in a row without reaching the target level. Please check the system. \n The local time is " + id(my_time).now().strftime("%H:%M:%S") + "."};
+                      request_headers:
+                        Content-Type: text/plain
+                        Title: "⚠️ Pump Alert Feeder A"
+                        Priority: "high"
+                        Tags: "warning,pump"
+                      on_response:
+                        - logger.log: "ntfy.sh: Successfully sent pump alert."
+                      on_error:
+                        - logger.log: "ntfy.sh: Error sending pump alert."
+
+            - delay: !lambda "return static_cast<int>(id(pump_delay).state) * 1000;"
+
+      - logger.log:
+          format: "pump: Target reached after %d cycles, deactivating pump."
+          args: [ 'id(pumps_in_cycle)' ]
+          level: INFO
+  - id: send_status_update
+    mode: single
+    then:
+      - http_request.post:
+          url: !lambda 'return "https://ntfy.sh/${ntfy_topic_status}";'
+          body: !lambda |-
+            // Helper function to get a number's state as a string, or "N/A" if not ready
+            auto get_state = [](esphome::template_::TemplateNumber *num) -> std::string {
+              if (num->has_state()) return std::to_string((int)num->state);
+              return "N/A";
+            };
+
+            std::string msg = "";
+
+            msg += "Uptime: ";
+            if (id(uptime_sensor).has_state()) {
+              msg += std::to_string(static_cast<int>(id(uptime_sensor).state));
+              msg += " s";
+            } else {
+              msg += "N/A";
+            }
+            msg += "\n";
+            msg += "Raw Capacitive Value: ";
+            msg += std::to_string(id(esp32_touch_pad).get_value());
+            msg += "\n";
+
+            msg += "Water Level Threshold: ";
+            msg += get_state(id(touch_threshold));
+            msg += "\n\n";
+
+            msg += "Total Pumps (Lifetime): ";
+            msg += std::to_string(id(total_pumps));
+            msg += "\n";
+            
+            msg += "Pumps Since Boot: ";
+            msg += std::to_string(id(total_pumps_since_boot));
+            msg += "\n\n";
+
+            msg += "Pump On Duration: ";
+            msg += get_state(id(pump_on_duration));
+            msg += " ms\n";
+            
+            msg += "Pump Delay: ";
+            msg += get_state(id(pump_delay));
+            msg += " s";
+
+            return msg;
+          request_headers:
+            Content-Type: text/plain
+            Title: "Feeder A - Status"
+            Priority: "default"
+            Tags: "information_source,chart"
+          on_response:
+            - logger.log: "ntfy.sh: Successfully sent daily status update."
+          on_error:
+            - logger.log: "ntfy.sh: Error sending daily status update."
+
+# ————— System Switches —————
+switch:
+  - platform: restart
+    name: "Reboot Device"
+    id: reboot_switch

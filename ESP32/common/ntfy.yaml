@@ -1,0 +1,64 @@
+time:
+  - platform: sntp
+    id: my_time
+    timezone: "Europe/Berlin"
+    on_time:
+      - seconds: 0
+        minutes: /15
+        # By OMITTING the 'hours:' key, it acts as a wildcard for EVERY hour.
+        then:
+          - logger.log: "TIME: Triggering 15-minute status update."
+          - script.execute: send_status_update
+          #      - seconds: 0
+          #        minutes: 15
+          #        hours: 11
+          #        then:
+          #          - logger.log: "TIME: Triggering 11:00 AM status update."
+          #          - script.execute: send_status_update
+      #      - seconds: 0
+      #        minutes: 0
+      #        hours: 13 
+      #        then:
+      #          - logger.log: "TIME: Triggering 1:00 PM status update."
+      #          - script.execute: send_status_update
+      #      # Trigger at 9:00 PM (21:00)
+      #      - seconds: 0
+      #        minutes: 0
+      #        hours: 20
+      #        then:
+      #          - logger.log: "TIME: Triggering 9:00 PM status update."
+      #          - script.execute: send_status_update
+
+
+# ----------------- HTTP Request Component -----------------
+
+# The base component configuration.
+# Settings here apply to all actions (like http_request.post).
+http_request:
+  # CORRECT: verify_ssl is set here, at the base level.
+  # This enables HTTPS certificate validation for all requests.
+  verify_ssl: true
+
+# ----------------- Actions and Triggers -----------------
+
+button:
+  - platform: template
+    name: "Send ntfy Test Notification"
+    on_press:
+      then:
+        - logger.log: "Button pressed. Sending notification to ntfy.sh..."
+        - http_request.post:
+            url: !lambda 'return "https://ntfy.sh/${ntfy_topic}";'
+            # 'verify_ssl' is removed from the action, as it's now in the base component.
+            body: !lambda |-
+              return { "Hello from Bee Feeder A! The local time is " + id(my_time).now().strftime("%H:%M:%S") + "." };
+            # CORRECT: 'headers' is renamed to 'request_headers'.
+            request_headers:
+              Content-Type: text/plain
+              Title: "ESP32 Alert"
+              Priority: "default"
+              Tags: "tada,esp32"
+            on_response:
+              - logger.log: "ntfy.sh: Successfully sent notification."
+            on_error:
+              - logger.log: "ntfy.sh: Error sending notification. Check Wi-Fi and topic name."
